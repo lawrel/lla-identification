@@ -29,6 +29,7 @@ import pandas as pd
 import random
 import json
 from pathlib import Path
+from scipy.signal import butter, sosfilt, sosfreqz
 
 from google.colab import drive
 drive.mount('/content/drive')
@@ -45,16 +46,29 @@ def column(matrix, i):
 
 #Set up Nyquist Frequency and Butterworth lowpass filter to remove noise
 fs = 100.0 
-cutoff = 5     
-nyq = 0.5 * fs  
-order = 3
+lowcut = 1
+highcut = 45
+# change to bandpass filter - come up with a range of values 
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+        nyq = 0.5 * fs
+        low = lowcut / nyq
+        high = highcut / nyq
+        sos = butter(order, [low, high], analog=False, btype='band', output='sos')
+        return sosfilt(sos, data)
 
-def butter_lowpass_filter(data, cutoff, fs, order):
-    normal_cutoff = cutoff / nyq
-    # Get the filter coefficients 
-    b, a = butter(order, normal_cutoff, btype='low', analog=False)
-    y = filtfilt(b, a, data, padlen=6)
-    return y
+def wavelet_denoise(data, noise_sigma, wavelet='haar'):
+    '''Filter accelerometer data using wavelet denoising
+    Modification of F. Blanco-Silva's code at: https://goo.gl/gOQwy5
+    '''
+    import pywt
+    wavelet = pywt.Wavelet(wavelet)
+    levels  = min(15, (numpy.floor(numpy.log2(data.shape[0]))).astype(int))
+    # Francisco's code used wavedec2 for image data
+    wavelet_coeffs = pywt.wavedec(data, wavelet, level=levels)
+    threshold = noise_sigma*numpy.sqrt(2*numpy.log2(data.size))
+    new_wavelet_coeffs = map(lambda x: pywt.threshold(x, threshold, mode='soft'),
+                             wavelet_coeffs)
+    return pywt.waverec(list(new_wavelet_coeffs), wavelet)
 
 #define a few different feature selection methods to test
 def featureSelection(features, k, labels, method):
@@ -65,19 +79,20 @@ def featureSelection(features, k, labels, method):
       model = LogisticRegression(solver='lbfgs')
       rfe = RFE(model, n_features_to_select=k)
       fit = rfe.fit(X, Y)
+      return fit
     
     if method == 1:
       #PCA
       pca = PCA(n_components=k)
       fit = pca.fit(X)
+      return fit
 
     if method == 2:
       #Univariate
       test = SelectKBest(score_func=f_classif, k=k)
       fit = test.fit(X, Y)
       set_printoptions(precision=3)
-      print(fit.scores_)
-      features = fit.transform(X)
+      return fit.transform(X)
 
 #load all LLA data
 s01 = mat73.loadmat(DATASET_DIR+'/S01.mat')
@@ -118,77 +133,87 @@ c14 = mat73.loadmat(DATASET_DIR+'/C14.mat')
 #The variable K exists in case of low-RAM runs. The full dataset requires ~64 GB of RAM and >4 hours to perform calculations
 # to enable the full run, replace k with len(x[i])
 x = [s01['SubjectData']['IMU']['Bouts']['Data'], s02['SubjectData']['IMU']['Bouts']['Data'], s03['SubjectData']['IMU']['Bouts']['Data'], s04['SubjectData']['IMU']['Bouts']['Data'], s05['SubjectData']['IMU']['Bouts']['Data'], s06['SubjectData']['IMU']['Bouts']['Data'], s07['SubjectData']['IMU']['Bouts']['Data'], s08['SubjectData']['IMU']['Bouts']['Data'], s09['SubjectData']['IMU']['Bouts']['Data'], s10['SubjectData']['IMU']['Bouts']['Data'], s11['SubjectData']['IMU']['Bouts']['Data'], s12['SubjectData']['IMU']['Bouts']['Data'], s13['SubjectData']['IMU']['Bouts']['Data'], s14['SubjectData']['IMU']['Bouts']['Data'], s15['SubjectData']['IMU']['Bouts']['Data'], s16['SubjectData']['IMU']['Bouts']['Data'], s17['SubjectData']['IMU']['Bouts']['Data'] ]
-
+_id = ['M','F','M','M','M','M','M','M','M','M','M','M','M','M','M','M','F']
 y = [s01['SubjectData']['IMU']['Bouts']['Timestamps'], s02['SubjectData']['IMU']['Bouts']['Timestamps'], s03['SubjectData']['IMU']['Bouts']['Timestamps'], s04['SubjectData']['IMU']['Bouts']['Timestamps'], s05['SubjectData']['IMU']['Bouts']['Timestamps'], s06['SubjectData']['IMU']['Bouts']['Timestamps'], s07['SubjectData']['IMU']['Bouts']['Timestamps'], s08['SubjectData']['IMU']['Bouts']['Timestamps'], s09['SubjectData']['IMU']['Bouts']['Timestamps'], s10['SubjectData']['IMU']['Bouts']['Timestamps'], s11['SubjectData']['IMU']['Bouts']['Timestamps'], s12['SubjectData']['IMU']['Bouts']['Timestamps'], s13['SubjectData']['IMU']['Bouts']['Timestamps'], s14['SubjectData']['IMU']['Bouts']['Timestamps'], s15['SubjectData']['IMU']['Bouts']['Timestamps'], s16['SubjectData']['IMU']['Bouts']['Timestamps'], s17['SubjectData']['IMU']['Bouts']['Timestamps'] ]
 print(s01['SubjectData']['IMU']['Bouts']['DataHeaders'])
 headers = s01['SubjectData']['IMU']['Bouts']['DataHeaders']
-data = []
-time = []
-k=20
+data_lla = []
+time_lla = []
+sex_lla = []
+k=30
 for i in range(len(x)): 
   for j in range(k):
-    data.append((x[i][j][0]))
-    time.append(y[i][j][0])
-  
+    data_lla.append((x[i][j][0]))
+    time_lla.append(y[i][j][0])
+    sex_lla.append(_id[i])
 
-print(len(data))
+print(len(data_lla))
+print(len(sex_lla))
 
 x = [c01['SubjectData']['IMU']['Bouts']['Data'], c02['SubjectData']['IMU']['Bouts']['Data'], c03['SubjectData']['IMU']['Bouts']['Data'], c04['SubjectData']['IMU']['Bouts']['Data'], c05['SubjectData']['IMU']['Bouts']['Data'], c06['SubjectData']['IMU']['Bouts']['Data'], c07['SubjectData']['IMU']['Bouts']['Data'], c08['SubjectData']['IMU']['Bouts']['Data'], c09['SubjectData']['IMU']['Bouts']['Data'], c10['SubjectData']['IMU']['Bouts']['Data'], c11['SubjectData']['IMU']['Bouts']['Data'], c12['SubjectData']['IMU']['Bouts']['Data'], c13['SubjectData']['IMU']['Bouts']['Data'], c14['SubjectData']['IMU']['Bouts']['Data'] ]
 y = [c01['SubjectData']['IMU']['Bouts']['Timestamps'], c02['SubjectData']['IMU']['Bouts']['Timestamps'], c03['SubjectData']['IMU']['Bouts']['Timestamps'], c04['SubjectData']['IMU']['Bouts']['Timestamps'], c05['SubjectData']['IMU']['Bouts']['Timestamps'], c06['SubjectData']['IMU']['Bouts']['Timestamps'], c07['SubjectData']['IMU']['Bouts']['Timestamps'], c08['SubjectData']['IMU']['Bouts']['Timestamps'], c09['SubjectData']['IMU']['Bouts']['Timestamps'], c10['SubjectData']['IMU']['Bouts']['Timestamps'], c11['SubjectData']['IMU']['Bouts']['Timestamps'], c12['SubjectData']['IMU']['Bouts']['Timestamps'], c13['SubjectData']['IMU']['Bouts']['Timestamps'], c14['SubjectData']['IMU']['Bouts']['Timestamps'] ]
 print(c01['SubjectData']['IMU']['Bouts']['DataHeaders'])
 headers = c01['SubjectData']['IMU']['Bouts']['DataHeaders']
-data = []
-time = []
-k=24
+_id = ['M','M','F','M','M','M','M','M','M','M','M','M','M','M']
+data_c = []
+time_c = []
+sex_c = []
+k=37
 for i in range(len(x)): 
   for j in range(k):
-    data.append((x[i][j][0]))
-    time.append(y[i][j][0])
-print(len(data))
+    data_c.append((x[i][j][0]))
+    time_c.append(y[i][j][0])
+    sex_c.append(_id[i])
+print(len(data_c))
+print(len(sex_c))
 
 #clean up our data, remove incomplete data sets and drop unnessecary columns
 # then, apply the butterworth filter to Accelerometer data
 #We also send our cleaned up data to a pandas DataFrame for easier manipulation
-
+sexL = []
 datax = []
 j = -1
-for i in range(len(data)):
+for i in range(len(data_lla)):
   #cull all incomplete data / non waveform data
-  if type(data[i][0]) is np.float64 or len(data[i][0])<10 or \
-   sum(data[i][0])==0:
+  if type(data_lla[i][0]) is np.float64 or len(data_lla[i][0])<10 or \
+   sum(data_lla[i][0])==0:
     continue
-  datax.append(pd.DataFrame(data[i]))
+  datax.append(pd.DataFrame(data_lla[i]))
   datax[j].columns = headers
-  datax[j]['Time'] = time[i]
+  datax[j]['Time'] = time_lla[i]
+  sexL.append(sex_lla[i])
 print(len(datax))
+print(len(sexL))
 # butterworth filter on all Accelerometer data, drop unneccesary temp data
 for k in range(len(datax)):
-  x = butter_lowpass_filter(datax[k].iloc[:,0], cutoff, fs, order)
+  x = butter_bandpass_filter(datax[k].iloc[:,0], lowcut, highcut, fs, order=5)
   datax[k].iloc[:,0] = x
-  y = butter_lowpass_filter(datax[k].iloc[:,1], cutoff, fs, order)
+  y = butter_bandpass_filter(datax[k].iloc[:,1], lowcut, highcut, fs, order=5)
   datax[k].iloc[:,0] = y
-  z = butter_lowpass_filter(datax[k].iloc[:,2], cutoff, fs, order)
+  z = butter_bandpass_filter(datax[k].iloc[:,2], lowcut, highcut, fs, order=5)
   datax[k].iloc[:,0] = z
   datax[k].drop(datax[k].columns[[3]], axis=1, inplace=True)
 
+sexC = []
 datac = []
 j = -1
-for i in range(len(data)):
+for i in range(len(data_c)):
   #cull all incomplete data / non waveform data
-  if type(data[i][0]) is np.float64 or len(data[i][0])<10 or \
-   sum(data[i][0])==0:
+  if type(data_c[i][0]) is np.float64 or len(data_c[i][0])<10 or \
+   sum(data_c[i][0])==0:
     continue
-  datac.append(pd.DataFrame(data[i]))
+  datac.append(pd.DataFrame(data_c[i]))
   datac[j].columns = headers
-  datac[j]['Time'] = time[i]
+  datac[j]['Time'] = time_c[i]
+  sexC.append(sex_c[i])
 print(len(datac))
 # butterworth filter on all Accelerometer data, drop unneccesary temp data
 for k in range(len(datac)):
-  x = butter_lowpass_filter(datac[k].iloc[:,0], cutoff, fs, order)
+  x = butter_bandpass_filter(datac[k].iloc[:,0], lowcut, highcut, fs, order=5)
   datac[k].iloc[:,0] = x
-  y = butter_lowpass_filter(datac[k].iloc[:,1], cutoff, fs, order)
+  y = butter_bandpass_filter(datac[k].iloc[:,1], lowcut, highcut, fs, order=5)
   datac[k].iloc[:,0] = y
-  z = butter_lowpass_filter(datac[k].iloc[:,2], cutoff, fs, order)
+  z = butter_bandpass_filter(datac[k].iloc[:,2], lowcut, highcut, fs, order=5)
   datac[k].iloc[:,0] = z
   datac[k].drop(datac[k].columns[[3]], axis=1, inplace=True)
 
@@ -224,204 +249,416 @@ for k in range(len(datac)):
     jerkz.append((datac[k].iloc[:,2][i]-datac[k].iloc[:,2][i+1])/(datac[k].loc[:,'Time'][i]-datac[k].loc[:,'Time'][i+1]))
   datac[k]['Jerk X'] = jerkx
   datac[k]['Jerk Y'] = jerky
-  datac[k]['Jerk Z'] = jerkz
+  datac[k]['Jerk Z'] = jerkz 
+print(datac[0])
 
 # Calculate Accelerometer and Jerk Magnitudes on Full Dataset
 # Magnitude of a vector = sqrt(x^2+y^2+z^2)
 #This is likely the 2nd longest operation in the whole thing
 for k in range(len(datac)):
   accelmag = []
+  magmag = []
   jerkmag = []
+  gyromag = []
   for i in range(len(datac[k].iloc[:,1])):
     accelmag.append( math.sqrt(datac[k].iloc[:,0][i]**2 + datac[k].iloc[:,1][i]**2 + datac[k].iloc[:,2][i]**2) )
+    gyromag.append( math.sqrt(datac[k].iloc[:,3][i]**2 + datac[k].iloc[:,4][i]**2 + datac[k].iloc[:,5][i]**2) )
+    magmag.append( math.sqrt(datac[k].iloc[:,6][i]**2 + datac[k].iloc[:,7][i]**2 + datac[k].iloc[:,8][i]**2) )
     jerkmag.append( math.sqrt(datac[k].iloc[:,10][i]**2 + datac[k].iloc[:,11][i]**2 + datac[k].iloc[:,12][i]**2) )
   datac[k]['Accel Mag'] = accelmag
   datac[k]['Jerk Mag'] = jerkmag
+  datac[k]['Mag Mag'] = magmag
+  datac[k]['Gyro Mag'] = gyromag
 
 for k in range(len(datax)):
   accelmag = []
   jerkmag = []
+  magmag = []
+  gyromag = []
   for i in range(len(datax[k].iloc[:,1])):
     accelmag.append( math.sqrt(datax[k].iloc[:,0][i]**2 + datax[k].iloc[:,1][i]**2 + datax[k].iloc[:,2][i]**2) )
+    gyromag.append( math.sqrt(datax[k].iloc[:,3][i]**2 + datax[k].iloc[:,4][i]**2 + datax[k].iloc[:,5][i]**2) )
+    magmag.append( math.sqrt(datax[k].iloc[:,6][i]**2 + datax[k].iloc[:,7][i]**2 + datax[k].iloc[:,8][i]**2) )
     jerkmag.append( math.sqrt(datax[k].iloc[:,10][i]**2 + datax[k].iloc[:,11][i]**2 + datax[k].iloc[:,12][i]**2) )
   datax[k]['Accel Mag'] = accelmag
   datax[k]['Jerk Mag'] = jerkmag
+  datax[k]['Mag Mag'] = magmag
+  datax[k]['Gyro Mag'] = gyromag
+print(len(datac))
 
 # OPTIONALLY, SAVE DATA TO CSVs TO RE-IMPORT FOR LATER EVALUATION
-for k in range(len(datac)):
-  filename = Path(DATASET_DIR+'/control/'+str(k)+'.csv')
-  datac[k].to_csv(filename)
-
+print(len(datax))
 for k in range(len(datax)):
   filename = Path(DATASET_DIR+'/lla/'+str(k)+'.csv')
   datax[k].to_csv(filename)
+
+for k in range(len(datac)):
+  filename = Path(DATASET_DIR+'/control/'+str(k)+'.csv')
+  datac[k].to_csv(filename)
 
 # OPTIONALLY, IMPORT DATA BACK FROM CSVs TO SAVE TIME/RAM on future runs
 k = 0
 datax = []
 filenameL = Path(DATASET_DIR+'/lla/'+str(k)+'.csv')
-for k in range(169):
+for k in range(497):
   df = pd.read_csv(filenameL)
   datax.append(df)
-
+print(len(datax))
 k = 0
 datac = []
 filenameC = Path(DATASET_DIR+'/control/'+str(k)+'.csv')
-for k in range(236):
+for k in range(514):
   df = pd.read_csv(filenameC)
   datac.append(df)
+print(len(datac))
 
 #Calculate Sliding Windows. Divy up the data into sliding windows of size 100 (1s of data) + a 33 frame offset
 print(len(datax))
 temp = datax
 datax = []
+sexLla = []
 for k in range(len(temp)):
   c = 1
-  while len(temp[k]) - c >=100:
-    datax.append(temp.iloc[c,c+100])
+  while (len(temp[k]) - c) > 100:
+    datax.append(temp[k].iloc[c:c+100])
+    #sexLla.append(sexL[k])
     c+=33
 print(len(datax))
 print(len(datac))
 temp = datac
 datac = []
+sexControl = []
 for k in range(len(temp)):
   c = 1
-  while len(temp[k]) - c >=100:
-    datac.append(temp.iloc[c,c+100])
+  while (len(temp[k]) - c)>=100:
+    datac.append(temp[k].iloc[c:c+100])
+    #sexControl.append(sexC[k])
     c+=33
 print(len(datac))
 
+df = pd.DataFrame(sexLla)
+filename = Path(DATASET_DIR+'/lla/sex.csv')
+df.to_csv(filename)
+
+df = pd.DataFrame(sexControl)
+filename = Path(DATASET_DIR+'/control/sex.csv')
+df.to_csv(filename)
+
 # get wavelet/fft features. These are complex numbers so we will need to use the magnitude 
 # instead of the raw fft values in order to perform evaluations on them
-fft = []
-
+import numpy
+fftL = []
 #fft on LLA dataset
 for k in range(len(datax)):
   df = pd.DataFrame()
-  df['accXfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Accelerometer X']))]
-  df['accYfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Accelerometer Y']))]
-  df['accZfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Accelerometer Z']))]
-  df['gyroXfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Gyroscope X']))]
-  df['gyroYfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Gyroscope Y']))]
-  df['gyroZfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Gyroscope Z']))]
-  df['magXfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Magnetometer X']))]
-  df['magYfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Magnetometer Y']))]
-  df['magZfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Magnetometer Z']))]
-  df['jerkXfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Jerk X']))]
-  df['jerkYfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Jerk Y']))]
-  df['jerkZfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Jerk Z']))]
-  df['magAccelfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Accel Mag']))]
-  df['magJerkfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Jerk Mag']))]
-  fft.append(df)
+  df['accXfft'] = [abs(ele) for ele in numpy.fft.fft((datax[k].loc[:,'Accelerometer X']))]
+  df['accYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Accelerometer Y']))]
+  df['accZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Accelerometer Z']))]
+  df['gyroXfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Gyroscope X']))]
+  df['gyroYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Gyroscope Y']))]
+  df['gyroZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Gyroscope Z']))]
+  df['magXfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Magnetometer X']))]
+  df['magYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Magnetometer Y']))]
+  df['magZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Magnetometer Z']))]
+  df['jerkXfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Jerk X']))]
+  df['jerkYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Jerk Y']))]
+  df['jerkZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Jerk Z']))]
+  df['magAccelfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Accel Mag']))]
+  df['magJerkfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Jerk Mag']))]
+  df['magMagfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Mag Mag']))]
+  df['magGyrofft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datax[k].loc[:,'Gyro Mag']))]
+  fftL.append(df)
+  if k%10000 == 0:
+    print(k)
+
+fftC = []
+k=0
 for k in range(len(datac)):
   df = pd.DataFrame()
-  df['accXfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Accelerometer X']))]
-  df['accYfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Accelerometer Y']))]
-  df['accZfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Accelerometer Z']))]
-  df['gyroXfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Gyroscope X']))]
-  df['gyroYfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Gyroscope Y']))]
-  df['gyroZfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Gyroscope Z']))]
-  df['magXfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Magnetometer X']))]
-  df['magYfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Magnetometer Y']))]
-  df['magZfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Magnetometer Z']))]
-  df['jerkXfft'] = [abs(ele) for ele in fft(np.array(datax[k].loc[:,'Jerk X']))]
-  df['jerkYfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Jerk Y']))]
-  df['jerkZfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Jerk Z']))]
-  df['magAccelfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Accel Mag']))]
-  df['magJerkfft'] = [abs(ele) for ele in fft(np.array(datac[k].loc[:,'Jerk Mag']))]
-  fft.append(df)
+  df['accXfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Accelerometer X']))]
+  df['accYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Accelerometer Y']))]
+  df['accZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Accelerometer Z']))]
+  df['gyroXfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Gyroscope X']))]
+  df['gyroYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Gyroscope Y']))]
+  df['gyroZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Gyroscope Z']))]
+  df['magXfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Magnetometer X']))]
+  df['magYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Magnetometer Y']))]
+  df['magZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Magnetometer Z']))]
+  df['jerkXfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Jerk X']))]
+  df['jerkYfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Jerk Y']))]
+  df['jerkZfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Jerk Z']))]
+  df['magAccelfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Accel Mag']))]
+  df['magJerkfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Jerk Mag']))]
+  df['magMagfft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Mag Mag']))]
+  df['magGyrofft'] = [abs(ele) for ele in numpy.fft.fft(np.array(datac[k].loc[:,'Gyro Mag']))]
+  fftC.append(df)
+  if k%10000 == 0:
+    print(k)
 
 #Get features from the time domain. This is also where we apply our labels to each waveform 
-features = []
-for k in range(len(datax)):
-  item = [0, min(datax[k].loc[:,'Accelerometer X']), max(datax[k].loc[:,'Accelerometer X']), np.mean(datax[k].loc[:,'Accelerometer X']), np.std(datax[k].loc[:,'Accelerometer X'], axis=0),
-          min(datax[k].loc[:,'Accelerometer Y']), max(datax[k].loc[:,'Accelerometer Y']), np.mean(datax[k].loc[:,'Accelerometer Y']), np.std(datax[k].loc[:,'Accelerometer Y'], axis=0),
-          min(datax[k].loc[:,'Accelerometer Z']), max(datax[k].loc[:,'Accelerometer Z']), np.mean(datax[k].loc[:,'Accelerometer Z']), np.std(datax[k].loc[:,'Accelerometer Z'], axis=0),
-          min(datax[k].loc[:,'Gyroscope X']), max(datax[k].loc[:,'Gyroscope X']), np.mean(datax[k].loc[:,'Gyroscope X']), np.std(datax[k].loc[:,'Gyroscope X'], axis=0),
-          min(datax[k].loc[:,'Gyroscope Y']), max(datax[k].loc[:,'Gyroscope Y']), np.mean(datax[k].loc[:,'Gyroscope Y']), np.std(datax[k].loc[:,'Gyroscope Y'], axis=0),
-          min(datax[k].loc[:,'Gyroscope Z']), max(datax[k].loc[:,'Gyroscope Z']), np.mean(datax[k].loc[:,'Gyroscope Z']), np.std(datax[k].loc[:,'Gyroscope Z'], axis=0),
-          min(datax[k].loc[:,'Magnetometer X']), max(datax[k].loc[:,'Magnetometer X']), np.mean(datax[k].loc[:,'Magnetometer X']), np.std(datax[k].loc[:,'Magnetometer X'], axis=0),
-          min(datax[k].loc[:,'Magnetometer Y']), max(datax[k].loc[:,'Magnetometer Y']), np.mean(datax[k].loc[:,'Magnetometer Y']), np.std(datax[k].loc[:,'Magnetometer Y'], axis=0),
-          min(datax[k].loc[:,'Magnetometer Z']), max(datax[k].loc[:,'Magnetometer Z']), np.mean(datax[k].loc[:,'Magnetometer Z']), np.std(datax[k].loc[:,'Magnetometer Z'], axis=0),
-          min(datax[k].loc[:,'Jerk X']), max(datax[k].loc[:,'Jerk X']), np.mean(datax[k].loc[:,'Jerk X']), np.std(datax[k].loc[:,'Jerk X'], axis=0),
-          min(datax[k].loc[:,'Jerk Y']), max(datax[k].loc[:,'Jerk Y']), np.mean(datax[k].loc[:,'Jerk Y']), np.std(datax[k].loc[:,'Jerk Y'], axis=0),
-          min(datax[k].loc[:,'Jerk Z']), max(datax[k].loc[:,'Jerk Z']), np.mean(datax[k].loc[:,'Jerk Z']), np.std(datax[k].loc[:,'Jerk Z'], axis=0),
-          min(datax[k].loc[:,'Accel Mag']), max(datax[k].loc[:,'Accel Mag']), np.mean(datax[k].loc[:,'Accel Mag']), np.std(datax[k].loc[:,'Accel Mag'], axis=0),
-          min(datax[k].loc[:,'Jerk Mag']), max(datax[k].loc[:,'Jerk Mag']), np.mean(datax[k].loc[:,'Jerk Mag']), np.std(datax[k].loc[:,'Jerk Mag'], axis=0),]
-  features.append(item)
-for k in range(len(datac)):
-  item = [1, min(datac[k].loc[:,'Accelerometer X']), max(datac[k].loc[:,'Accelerometer X']), np.mean(datac[k].loc[:,'Accelerometer X']), np.std(datac[k].loc[:,'Accelerometer X'], axis=0),
-          min(datac[k].loc[:,'Accelerometer Y']), max(datac[k].loc[:,'Accelerometer Y']), np.mean(datac[k].loc[:,'Accelerometer Y']), np.std(datac[k].loc[:,'Accelerometer Y'], axis=0),
-          min(datac[k].loc[:,'Accelerometer Z']), max(datac[k].loc[:,'Accelerometer Z']), np.mean(datac[k].loc[:,'Accelerometer Z']), np.std(datac[k].loc[:,'Accelerometer Z'], axis=0),
-          min(datac[k].loc[:,'Gyroscope X']), max(datac[k].loc[:,'Gyroscope X']), np.mean(datac[k].loc[:,'Gyroscope X']), np.std(datac[k].loc[:,'Gyroscope X'], axis=0),
-          min(datac[k].loc[:,'Gyroscope Y']), max(datac[k].loc[:,'Gyroscope Y']), np.mean(datac[k].loc[:,'Gyroscope Y']), np.std(datac[k].loc[:,'Gyroscope Y'], axis=0),
-          min(datac[k].loc[:,'Gyroscope Z']), max(datac[k].loc[:,'Gyroscope Z']), np.mean(datac[k].loc[:,'Gyroscope Z']), np.std(datac[k].loc[:,'Gyroscope Z'], axis=0),
-          min(datac[k].loc[:,'Magnetometer X']), max(datac[k].loc[:,'Magnetometer X']), np.mean(datac[k].loc[:,'Magnetometer X']), np.std(datac[k].loc[:,'Magnetometer X'], axis=0),
-          min(datac[k].loc[:,'Magnetometer Y']), max(datac[k].loc[:,'Magnetometer Y']), np.mean(datac[k].loc[:,'Magnetometer Y']), np.std(datac[k].loc[:,'Magnetometer Y'], axis=0),
-          min(datac[k].loc[:,'Magnetometer Z']), max(datac[k].loc[:,'Magnetometer Z']), np.mean(datac[k].loc[:,'Magnetometer Z']), np.std(datac[k].loc[:,'Magnetometer Z'], axis=0),
-          min(datac[k].loc[:,'Jerk X']), max(datac[k].loc[:,'Jerk X']), np.mean(datac[k].loc[:,'Jerk X']), np.std(datac[k].loc[:,'Jerk X'], axis=0),
-          min(datac[k].loc[:,'Jerk Y']), max(datac[k].loc[:,'Jerk Y']), np.mean(datac[k].loc[:,'Jerk Y']), np.std(datac[k].loc[:,'Jerk Y'], axis=0),
-          min(datac[k].loc[:,'Jerk Z']), max(datac[k].loc[:,'Jerk Z']), np.mean(datac[k].loc[:,'Jerk Z']), np.std(datac[k].loc[:,'Jerk Z'], axis=0),
-          min(datac[k].loc[:,'Accel Mag']), max(datac[k].loc[:,'Accel Mag']), np.mean(datac[k].loc[:,'Accel Mag']), np.std(datac[k].loc[:,'Accel Mag'], axis=0),
-          min(datac[k].loc[:,'Jerk Mag']), max(datac[k].loc[:,'Jerk Mag']), np.mean(datac[k].loc[:,'Jerk Mag']), np.std(datac[k].loc[:,'Jerk Mag'], axis=0),]
-  features.append(item)
+from scipy.stats import skew, kurtosis
+def getfeatures(features, label, fftL, datax):
+  for k in range(len(datax)):
+    item = [label, min(datax[k].loc[:,'Accelerometer X']), max(datax[k].loc[:,'Accelerometer X']), np.sqrt(np.mean(datax[k].loc[:,'Accelerometer X']**2)), np.std(datax[k].loc[:,'Accelerometer X'], axis=0), skew(datax[k].loc[:,'Accelerometer X']), kurtosis(datax[k].loc[:,'Accelerometer X']),
+          min(datax[k].loc[:,'Accelerometer Y']), max(datax[k].loc[:,'Accelerometer Y']), np.sqrt(np.mean(datax[k].loc[:,'Accelerometer Y']**2)), np.std(datax[k].loc[:,'Accelerometer Y'], axis=0),  skew(datax[k].loc[:,'Accelerometer Y']), kurtosis(datax[k].loc[:,'Accelerometer Y']),
+          min(datax[k].loc[:,'Accelerometer Z']), max(datax[k].loc[:,'Accelerometer Z']), np.sqrt(np.mean(datax[k].loc[:,'Accelerometer Z']**2)), np.std(datax[k].loc[:,'Accelerometer Z'], axis=0), skew(datax[k].loc[:,'Accelerometer Z']), kurtosis(datax[k].loc[:,'Accelerometer Z']),
+          min(datax[k].loc[:,'Gyroscope X']), max(datax[k].loc[:,'Gyroscope X']), np.sqrt(np.mean(datax[k].loc[:,'Gyroscope X']**2)), np.std(datax[k].loc[:,'Gyroscope X'], axis=0), skew(datax[k].loc[:,'Gyroscope X']), kurtosis(datax[k].loc[:,'Gyroscope X']),
+          min(datax[k].loc[:,'Gyroscope Y']), max(datax[k].loc[:,'Gyroscope Y']), np.sqrt(np.mean(datax[k].loc[:,'Gyroscope Y']**2)), np.std(datax[k].loc[:,'Gyroscope Y'], axis=0), skew(datax[k].loc[:,'Gyroscope Y']), kurtosis(datax[k].loc[:,'Gyroscope Y']),
+          min(datax[k].loc[:,'Gyroscope Z']), max(datax[k].loc[:,'Gyroscope Z']), np.sqrt(np.mean(datax[k].loc[:,'Gyroscope Z']**2)), np.std(datax[k].loc[:,'Gyroscope Z'], axis=0), skew(datax[k].loc[:,'Gyroscope Z']), kurtosis(datax[k].loc[:,'Gyroscope Z']),
+          min(datax[k].loc[:,'Magnetometer X']), max(datax[k].loc[:,'Magnetometer X']), np.sqrt(np.mean(datax[k].loc[:,'Magnetometer X']**2)), np.std(datax[k].loc[:,'Magnetometer X'], axis=0), skew(datax[k].loc[:,'Magnetometer X']), kurtosis(datax[k].loc[:,'Magnetometer X']),
+          min(datax[k].loc[:,'Magnetometer Y']), max(datax[k].loc[:,'Magnetometer Y']), np.sqrt(np.mean(datax[k].loc[:,'Magnetometer Y']**2)), np.std(datax[k].loc[:,'Magnetometer Y'], axis=0), skew(datax[k].loc[:,'Magnetometer Y']), kurtosis(datax[k].loc[:,'Magnetometer Y']),
+          min(datax[k].loc[:,'Magnetometer Z']), max(datax[k].loc[:,'Magnetometer Z']), np.sqrt(np.mean(datax[k].loc[:,'Magnetometer Z']**2)), np.std(datax[k].loc[:,'Magnetometer Z'], axis=0), skew(datax[k].loc[:,'Magnetometer Z']), kurtosis(datax[k].loc[:,'Magnetometer Z']),
+          min(datax[k].loc[:,'Jerk X']), max(datax[k].loc[:,'Jerk X']), np.sqrt(np.mean(datax[k].loc[:,'Jerk X']**2)), np.std(datax[k].loc[:,'Jerk X'], axis=0), skew(datax[k].loc[:,'Jerk X']), kurtosis(datax[k].loc[:,'Jerk X']),
+          min(datax[k].loc[:,'Jerk Y']), max(datax[k].loc[:,'Jerk Y']), np.sqrt(np.mean(datax[k].loc[:,'Jerk Y']**2)), np.std(datax[k].loc[:,'Jerk Y'], axis=0), skew(datax[k].loc[:,'Jerk Y']), kurtosis(datax[k].loc[:,'Jerk X']),
+          min(datax[k].loc[:,'Jerk Z']), max(datax[k].loc[:,'Jerk Z']), np.sqrt(np.mean(datax[k].loc[:,'Jerk Z']**2)), np.std(datax[k].loc[:,'Jerk Z'], axis=0), skew(datax[k].loc[:,'Jerk Z']), kurtosis(datax[k].loc[:,'Jerk X']),
+          min(datax[k].loc[:,'Accel Mag']), max(datax[k].loc[:,'Accel Mag']), np.sqrt(np.mean(datax[k].loc[:,'Accel Mag']**2)), np.std(datax[k].loc[:,'Accel Mag'], axis=0), skew(datax[k].loc[:,'Accel Mag']), kurtosis(datax[k].loc[:,'Accel Mag']),
+          min(datax[k].loc[:,'Jerk Mag']), max(datax[k].loc[:,'Jerk Mag']), np.sqrt(np.mean(datax[k].loc[:,'Jerk Mag']**2)), np.std(datax[k].loc[:,'Jerk Mag'], axis=0), skew(datax[k].loc[:,'Jerk Mag']), kurtosis(datax[k].loc[:,'Jerk Mag']),
+          min(datax[k].loc[:,'Mag Mag']), max(datax[k].loc[:,'Mag Mag']), np.sqrt(np.mean(datax[k].loc[:,'Mag Mag']**2)), np.std(datax[k].loc[:,'Mag Mag'], axis=0), skew(datax[k].loc[:,'Mag Mag']), kurtosis(datax[k].loc[:,'Mag Mag']),
+          min(datax[k].loc[:,'Gyro Mag']), max(datax[k].loc[:,'Gyro Mag']), np.sqrt(np.mean(datax[k].loc[:,'Gyro Mag']**2)), np.std(datax[k].loc[:,'Gyro Mag'], axis=0), skew(datax[k].loc[:,'Gyro Mag']), kurtosis(datax[k].loc[:,'Gyro Mag']),
+          min(fftL[k].loc[:,'accXfft']), max(fftL[k].loc[:,'accXfft']), np.sqrt(np.mean(fftL[k].loc[:,'accXfft']**2)), np.std(fftL[k].loc[:,'accXfft'], axis=0), skew(fftL[k].loc[:,'accXfft']), kurtosis(fftL[k].loc[:,'accXfft']),
+          min(fftL[k].loc[:,'accYfft']), max(fftL[k].loc[:,'accYfft']), np.sqrt(np.mean(fftL[k].loc[:,'accYfft']**2)), np.std(fftL[k].loc[:,'accYfft'], axis=0), skew(fftL[k].loc[:,'accYfft']), kurtosis(fftL[k].loc[:,'accYfft']),
+          min(fftL[k].loc[:,'accZfft']), max(fftL[k].loc[:,'accZfft']), np.sqrt(np.mean(fftL[k].loc[:,'accZfft']**2)), np.std(fftL[k].loc[:,'accZfft'], axis=0), skew(fftL[k].loc[:,'accZfft']), kurtosis(fftL[k].loc[:,'accZfft']),
+          min(fftL[k].loc[:,'gyroXfft']), max(fftL[k].loc[:,'gyroXfft']), np.sqrt(np.mean(fftL[k].loc[:,'gyroXfft']**2)), np.std(fftL[k].loc[:,'gyroXfft'], axis=0), skew(fftL[k].loc[:,'gyroXfft']), kurtosis(fftL[k].loc[:,'gyroXfft']),
+          min(fftL[k].loc[:,'gyroYfft']), max(fftL[k].loc[:,'gyroYfft']), np.sqrt(np.mean(fftL[k].loc[:,'gyroYfft']**2)), np.std(fftL[k].loc[:,'gyroYfft'], axis=0), skew(fftL[k].loc[:,'gyroYfft']), kurtosis(fftL[k].loc[:,'gyroYfft']),
+          min(fftL[k].loc[:,'gyroZfft']), max(fftL[k].loc[:,'gyroZfft']), np.sqrt(np.mean(fftL[k].loc[:,'gyroZfft']**2)), np.std(fftL[k].loc[:,'gyroZfft'], axis=0), skew(fftL[k].loc[:,'gyroZfft']), kurtosis(fftL[k].loc[:,'gyroZfft']),
+          min(fftL[k].loc[:,'magXfft']), max(fftL[k].loc[:,'magXfft']), np.sqrt(np.mean(fftL[k].loc[:,'magXfft']**2)), np.std(fftL[k].loc[:,'magXfft'], axis=0), skew(fftL[k].loc[:,'magXfft']), kurtosis(fftL[k].loc[:,'magXfft']),
+          min(fftL[k].loc[:,'magYfft']), max(fftL[k].loc[:,'magYfft']), np.sqrt(np.mean(fftL[k].loc[:,'magYfft']**2)), np.std(fftL[k].loc[:,'magYfft'], axis=0), skew(fftL[k].loc[:,'magYfft']), kurtosis(fftL[k].loc[:,'magYfft']),
+          min(fftL[k].loc[:,'magZfft']), max(fftL[k].loc[:,'magZfft']), np.sqrt(np.mean(fftL[k].loc[:,'magZfft']**2)), np.std(fftL[k].loc[:,'magZfft'], axis=0), skew(fftL[k].loc[:,'magZfft']), kurtosis(fftL[k].loc[:,'magZfft']),
+          min(fftL[k].loc[:,'jerkXfft']), max(fftL[k].loc[:,'jerkXfft']), np.sqrt(np.mean(fftL[k].loc[:,'jerkXfft']**2)), np.std(fftL[k].loc[:,'jerkXfft'], axis=0), skew(fftL[k].loc[:,'jerkXfft']), kurtosis(fftL[k].loc[:,'jerkXfft']),
+          min(fftL[k].loc[:,'jerkYfft']), max(fftL[k].loc[:,'jerkYfft']), np.sqrt(np.mean(fftL[k].loc[:,'jerkYfft']**2)), np.std(fftL[k].loc[:,'jerkYfft'], axis=0), skew(fftL[k].loc[:,'jerkYfft']), kurtosis(fftL[k].loc[:,'jerkYfft']),
+          min(fftL[k].loc[:,'jerkZfft']), max(fftL[k].loc[:,'jerkZfft']), np.sqrt(np.mean(fftL[k].loc[:,'jerkZfft']**2)), np.std(fftL[k].loc[:,'jerkZfft'], axis=0), skew(fftL[k].loc[:,'jerkZfft']), kurtosis(fftL[k].loc[:,'jerkZfft']),
+          min(fftL[k].loc[:,'magAccelfft']), max(fftL[k].loc[:,'magAccelfft']), np.sqrt(np.mean(fftL[k].loc[:,'magAccelfft']**2)), np.std(fftL[k].loc[:,'magAccelfft'], axis=0), skew(fftL[k].loc[:,'magAccelfft']), kurtosis(fftL[k].loc[:,'magAccelfft']),
+          min(fftL[k].loc[:,'magJerkfft']), max(fftL[k].loc[:,'magJerkfft']), np.sqrt(np.mean(fftL[k].loc[:,'magJerkfft']**2)), np.std(fftL[k].loc[:,'magJerkfft'], axis=0), skew(fftL[k].loc[:,'magJerkfft']), kurtosis(fftL[k].loc[:,'magJerkfft']),
+          min(fftL[k].loc[:,'magMagfft']), max(fftL[k].loc[:,'magMagfft']), np.sqrt(np.mean(fftL[k].loc[:,'magMagfft']**2)), np.std(fftL[k].loc[:,'magMagfft'], axis=0), skew(fftL[k].loc[:,'magMagfft']), kurtosis(fftL[k].loc[:,'magMagfft']),
+          min(fftL[k].loc[:,'magGyrofft']), max(fftL[k].loc[:,'magGyrofft']), np.sqrt(np.mean(fftL[k].loc[:,'magGyrofft']**2)), np.std(fftL[k].loc[:,'magGyrofft'], axis=0), skew(fftL[k].loc[:,'magGyrofft']), kurtosis(fftL[k].loc[:,'magGyrofft']),
+          ]
+    if k%10000 == 0:
+      print(k)
+    features.append(item)
+  return features
 
 #Calculate and append fft features 
+# increase features - remove mean, use rms, kurtosis, skewness, dominant frequency,
 features = []
-for k in range(len(datax)):
-  item = [0, min(datax[k].loc[:,'Accelerometer X']), max(datax[k].loc[:,'Accelerometer X']), np.mean(datax[k].loc[:,'Accelerometer X']), np.std(datax[k].loc[:,'Accelerometer X'], axis=0),
-          min(datax[k].loc[:,'Accelerometer Y']), max(datax[k].loc[:,'Accelerometer Y']), np.mean(datax[k].loc[:,'Accelerometer Y']), np.std(datax[k].loc[:,'Accelerometer Y'], axis=0),
-          min(datax[k].loc[:,'Accelerometer Z']), max(datax[k].loc[:,'Accelerometer Z']), np.mean(datax[k].loc[:,'Accelerometer Z']), np.std(datax[k].loc[:,'Accelerometer Z'], axis=0),
-          min(datax[k].loc[:,'Gyroscope X']), max(datax[k].loc[:,'Gyroscope X']), np.mean(datax[k].loc[:,'Gyroscope X']), np.std(datax[k].loc[:,'Gyroscope X'], axis=0),
-          min(datax[k].loc[:,'Gyroscope Y']), max(datax[k].loc[:,'Gyroscope Y']), np.mean(datax[k].loc[:,'Gyroscope Y']), np.std(datax[k].loc[:,'Gyroscope Y'], axis=0),
-          min(datax[k].loc[:,'Gyroscope Z']), max(datax[k].loc[:,'Gyroscope Z']), np.mean(datax[k].loc[:,'Gyroscope Z']), np.std(datax[k].loc[:,'Gyroscope Z'], axis=0),
-          min(datax[k].loc[:,'Magnetometer X']), max(datax[k].loc[:,'Magnetometer X']), np.mean(datax[k].loc[:,'Magnetometer X']), np.std(datax[k].loc[:,'Magnetometer X'], axis=0),
-          min(datax[k].loc[:,'Magnetometer Y']), max(datax[k].loc[:,'Magnetometer Y']), np.mean(datax[k].loc[:,'Magnetometer Y']), np.std(datax[k].loc[:,'Magnetometer Y'], axis=0),
-          min(datax[k].loc[:,'Magnetometer Z']), max(datax[k].loc[:,'Magnetometer Z']), np.mean(datax[k].loc[:,'Magnetometer Z']), np.std(datax[k].loc[:,'Magnetometer Z'], axis=0),
-          min(datax[k].loc[:,'Jerk X']), max(datax[k].loc[:,'Jerk X']), np.mean(datax[k].loc[:,'Jerk X']), np.std(datax[k].loc[:,'Jerk X'], axis=0),
-          min(datax[k].loc[:,'Jerk Y']), max(datax[k].loc[:,'Jerk Y']), np.mean(datax[k].loc[:,'Jerk Y']), np.std(datax[k].loc[:,'Jerk Y'], axis=0),
-          min(datax[k].loc[:,'Jerk Z']), max(datax[k].loc[:,'Jerk Z']), np.mean(datax[k].loc[:,'Jerk Z']), np.std(datax[k].loc[:,'Jerk Z'], axis=0),
-          min(datax[k].loc[:,'Accel Mag']), max(datax[k].loc[:,'Accel Mag']), np.mean(datax[k].loc[:,'Accel Mag']), np.std(datax[k].loc[:,'Accel Mag'], axis=0),
-          min(datax[k].loc[:,'Jerk Mag']), max(datax[k].loc[:,'Jerk Mag']), np.mean(datax[k].loc[:,'Jerk Mag']), np.std(datax[k].loc[:,'Jerk Mag'], axis=0),]
-  features.append(item)
-for k in range(len(datac)):
-  item = [1, min(datac[k].loc[:,'Accelerometer X']), max(datac[k].loc[:,'Accelerometer X']), np.mean(datac[k].loc[:,'Accelerometer X']), np.std(datac[k].loc[:,'Accelerometer X'], axis=0),
-          min(datac[k].loc[:,'Accelerometer Y']), max(datac[k].loc[:,'Accelerometer Y']), np.mean(datac[k].loc[:,'Accelerometer Y']), np.std(datac[k].loc[:,'Accelerometer Y'], axis=0),
-          min(datac[k].loc[:,'Accelerometer Z']), max(datac[k].loc[:,'Accelerometer Z']), np.mean(datac[k].loc[:,'Accelerometer Z']), np.std(datac[k].loc[:,'Accelerometer Z'], axis=0),
-          min(datac[k].loc[:,'Gyroscope X']), max(datac[k].loc[:,'Gyroscope X']), np.mean(datac[k].loc[:,'Gyroscope X']), np.std(datac[k].loc[:,'Gyroscope X'], axis=0),
-          min(datac[k].loc[:,'Gyroscope Y']), max(datac[k].loc[:,'Gyroscope Y']), np.mean(datac[k].loc[:,'Gyroscope Y']), np.std(datac[k].loc[:,'Gyroscope Y'], axis=0),
-          min(datac[k].loc[:,'Gyroscope Z']), max(datac[k].loc[:,'Gyroscope Z']), np.mean(datac[k].loc[:,'Gyroscope Z']), np.std(datac[k].loc[:,'Gyroscope Z'], axis=0),
-          min(datac[k].loc[:,'Magnetometer X']), max(datac[k].loc[:,'Magnetometer X']), np.mean(datac[k].loc[:,'Magnetometer X']), np.std(datac[k].loc[:,'Magnetometer X'], axis=0),
-          min(datac[k].loc[:,'Magnetometer Y']), max(datac[k].loc[:,'Magnetometer Y']), np.mean(datac[k].loc[:,'Magnetometer Y']), np.std(datac[k].loc[:,'Magnetometer Y'], axis=0),
-          min(datac[k].loc[:,'Magnetometer Z']), max(datac[k].loc[:,'Magnetometer Z']), np.mean(datac[k].loc[:,'Magnetometer Z']), np.std(datac[k].loc[:,'Magnetometer Z'], axis=0),
-          min(datac[k].loc[:,'Jerk X']), max(datac[k].loc[:,'Jerk X']), np.mean(datac[k].loc[:,'Jerk X']), np.std(datac[k].loc[:,'Jerk X'], axis=0),
-          min(datac[k].loc[:,'Jerk Y']), max(datac[k].loc[:,'Jerk Y']), np.mean(datac[k].loc[:,'Jerk Y']), np.std(datac[k].loc[:,'Jerk Y'], axis=0),
-          min(datac[k].loc[:,'Jerk Z']), max(datac[k].loc[:,'Jerk Z']), np.mean(datac[k].loc[:,'Jerk Z']), np.std(datac[k].loc[:,'Jerk Z'], axis=0),
-          min(datac[k].loc[:,'Accel Mag']), max(datac[k].loc[:,'Accel Mag']), np.mean(datac[k].loc[:,'Accel Mag']), np.std(datac[k].loc[:,'Accel Mag'], axis=0),
-          min(datac[k].loc[:,'Jerk Mag']), max(datac[k].loc[:,'Jerk Mag']), np.mean(datac[k].loc[:,'Jerk Mag']), np.std(datac[k].loc[:,'Jerk Mag'], axis=0),]
-  features.append(item)
+features = getfeatures(features, 0, fftL, datax)
+features = getfeatures(features, 1, fftC, datac)
 
+df = pd.DataFrame(features)
+filename = Path(DATASET_DIR+'/features.csv')
+df.to_csv(filename)
+
+filename = Path(DATASET_DIR+'/features.csv')
+features = pd.read_csv(filename)
+
+filename = Path(DATASET_DIR+'/control/sex.csv')
+sexControl = pd.read_csv(filename)
+filename = Path(DATASET_DIR+'/lla/sex.csv')
+sexLla = pd.read_csv(filename)
+sexLla.drop("Unnamed: 0", axis=1, inplace=True)
+sexControl.drop("Unnamed: 0", axis=1, inplace=True)
+print(len(sexLla))
+print(len(sexControl))
+
+# pov: u messed up the labels
+
+#features.drop("Unnamed: 0", axis=1, inplace=True)
+#features.drop("0", axis=1, inplace=True)
+print(len(sexLla))
+print(sexLla)
+print(len(sexControl))
+print(sexControl)
+labels = []
+for i in range(len(datax)):
+  labels.append("LLA")
+for i in range(len(datac)):
+  labels.append("Control")
+temp = [sexLla, sexControl]
+sex_labels = pd.concat(temp)
+print(len(sex_labels))
+print(len(labels))
+
+#Mann Whitney U test to compare sets 
+from scipy.stats import ttest_ind
+print(len(datax))
+feature_names = ["label","Acc X min", "Acc X max", "Acc X RMS", "Acc X STD", "Acc X Skewness", "Acc X Kurtosis", "Acc Y min", "Acc Y max", "Acc Y RMS", "Acc Y STD", "Acc Y Skewness", "Acc Y Kurtosis", "Acc Z min", "Acc Z max", "Acc Z RMS", "Acc Z STD", "Acc Z Skewness", "Acc Z Kurtosis",
+                 "Gyro X min", "Gyro X max", "Gyro X RMS", "Gyro X STD", "Gyro X Skewness", "Gyro X Kurtosis","Gyro Y min", "Gyro Y max", "Gyro Y RMS", "Gyro Y STD", "Gyro Y Skewness", "Gyro Y Kurtosis", "Gyro Z min", "Gyro Z max", "Gyro Z RMS", "Gyro Z STD", "Gyro Z Skewness", "Gyro Z Kurtosis",
+                 "Mag X min", "Mag X max", "Mag X RMS", "Mag X STD", "Mag X Skewness", "Mag X Kurtosis", "Mag Y min", "Mag Y max", "Mag Y RMS", "Mag Y STD", "Mag Y Skewness", "Mag Y Kurtosis", "Mag Z min", "Mag Z max", "Mag Z RMS", "Mag Z STD", "Mag Z Skewness", "Mag Z Kurtosis",
+                 "Jerk X min", "Jerk X max", "Jerk X RMS", "Jerk X STD", "Jerk X Skewness", "Jerk X Kurtosis", "Jerk Y min", "Jerk Y max", "Jerk Y RMS", "Jerk Y STD", "Jerk Y Skewness", "Jerk Y Kurtosis", "Jerk Z min", "Jerk Z max", "Jerk Z RMS", "Jerk Z STD", "Jerk Z Skewness", "Jerk Z Kurtosis",
+                 "Accel Mag min", "Accel Mag max", "Accel Mag RMS", "Accel Mag STD", "Accel Mag Skewness", "Accel Mag Kurtosis", "Jerk Mag min", "Jerk Mag max", "Jerk Mag RMS", "Jerk Mag STD", "Jerk Mag Skewness", "Jerk Mag Kurtosis", 
+                 "Mag Mag min", "Mag Mag max", "Mag Mag RMS", "Mag Mag STD", "Mag Mag Skewness", "Mag Mag Kurtosis", "Gyro Mag min", "Gyro Mag max", "Gyro Mag RMS", "Gyro Mag STD", "Gyro Mag Skewness", "Gyro Mag Kurtosis",
+                 "FFT Acc X min", "FFT Acc X max", "FFT Acc X RMS", "FFT Acc X STD", "FFT Acc X Skewness", "FFT Acc X Kurtosis", "FFT Acc Y min", "FFT Acc Y max", "FFT Acc Y RMS", "FFT Acc Y STD", "FFT Acc Y Skewness", "FFT Acc Y Kurtosis", "FFT Acc Z min", "FFT Acc Z max", "FFT Acc Z RMS", "FFT Acc Z STD", "FFT Acc Z Skewness", "FFT Acc Z Kurtosis",
+                 "FFT Gyro X min", "FFT Gyro X max", "FFT Gyro X RMS", "FFT Gyro X STD", "FFT Gyro X Skewness", "FFT Gyro X Kurtosis","FFT Gyro Y min", "FFT Gyro Y max", "FFT Gyro Y RMS", "FFT Gyro Y STD", "FFT Gyro Y Skewness", "FFT Gyro Y Kurtosis", "FFT Gyro Z min", "FFT Gyro Z max", "FFT Gyro Z RMS", "FFT Gyro Z STD", "FFT Gyro Z Skewness", "FFT Gyro Z Kurtosis",
+                 "FFT Mag X min", "FFT Mag X max", "FFT Mag X RMS", "FFT Mag X STD", "FFT Mag X Skewness", "FFT Mag X Kurtosis", "FFT Mag Y min", "FFT Mag Y max", "FFT Mag Y RMS", "FFT Mag Y STD", "FFT Mag Y Skewness", "FFT Mag Y Kurtosis", "FFT Mag Z min", "FFT Mag Z max", "FFT Mag Z RMS", "FFT Mag Z STD", "FFT Mag Z Skewness", "FFT Mag Z Kurtosis",
+                 "FFT Jerk X min", "FFT Jerk X max", "FFT Jerk X RMS", "FFT Jerk X STD", "FFT Jerk X Skewness", "FFT Jerk X Kurtosis", "FFT Jerk Y min", "FFT Jerk Y max", "FFT Jerk Y RMS", "FFT Jerk Y STD", "FFT Jerk Y Skewness", "FFT Jerk Y Kurtosis", "FFT Jerk Z min", "Jerk Z max", "FFT Jerk Z RMS", "FFT Jerk Z STD", "FFT Jerk Z Skewness", "FFT Jerk Z Kurtosis",
+                 "FFT Accel Mag min", "FFT Accel Mag max", "FFT Accel Mag RMS", "FFT Accel Mag STD", "FFT Accel Mag Skewness", "FFT Accel Mag Kurtosis", "FFT Jerk Mag min", "FFT Jerk Mag max", "FFT Jerk Mag RMS", "FFT Jerk Mag STD", "FFT Jerk Mag Skewness", "FFT Jerk Mag Kurtosis", 
+                 "FFT Mag Mag min", "FFT Mag Mag max", "FFT Mag Mag RMS", "FFT Mag Mag STD", "FFT Mag Mag Skewness", "FFT Mag Mag Kurtosis", "FFT Gyro Mag min", "FFT Gyro Mag max", "FFT Gyro Mag RMS", "FFT Gyro Mag STD", "FFT Gyro Mag Skewness", "FFT Gyro Mag Kurtosis"
+                 ]
+#features.drop("Unnamed: 0", axis=1, inplace=True)
+print(ttest_ind(datax[0]['Accelerometer X'], datac[0]['Accelerometer X'], alternative="less"))
+print(ttest_ind(datax[0]['Accelerometer X'], datac[0]['Accelerometer X'], alternative="greater"))
+print(ttest_ind(datax[0]['Accelerometer X'], datac[0]['Accelerometer X'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Accelerometer Y'], datac[0]['Accelerometer Y'], alternative="less"))
+print(ttest_ind(datax[0]['Accelerometer Y'], datac[0]['Accelerometer Y'], alternative="greater"))
+print(ttest_ind(datax[0]['Accelerometer Y'], datac[0]['Accelerometer Y'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Accelerometer Z'], datac[0]['Accelerometer Z'], alternative="less"))
+print(ttest_ind(datax[0]['Accelerometer Z'], datac[0]['Accelerometer Z'], alternative="greater"))
+print(ttest_ind(datax[0]['Accelerometer Z'], datac[0]['Accelerometer Z'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Gyroscope X'], datac[0]['Gyroscope X'], alternative="less"))
+print(ttest_ind(datax[0]['Gyroscope X'], datac[0]['Gyroscope X'], alternative="greater"))
+print(ttest_ind(datax[0]['Gyroscope X'], datac[0]['Gyroscope X'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Gyroscope Y'], datac[0]['Gyroscope Y'], alternative="less"))
+print(ttest_ind(datax[0]['Gyroscope Y'], datac[0]['Gyroscope Y'], alternative="greater"))
+print(ttest_ind(datax[0]['Gyroscope Y'], datac[0]['Gyroscope Y'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Gyroscope Z'], datac[0]['Gyroscope Z'], alternative="less"))
+print(ttest_ind(datax[0]['Gyroscope Z'], datac[0]['Gyroscope Z'], alternative="greater"))
+print(ttest_ind(datax[0]['Gyroscope Z'], datac[0]['Gyroscope Z'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Magnetometer X'], datac[0]['Magnetometer X'], alternative="less"))
+print(ttest_ind(datax[0]['Magnetometer X'], datac[0]['Magnetometer X'], alternative="greater"))
+print(ttest_ind(datax[0]['Magnetometer X'], datac[0]['Magnetometer X'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Magnetometer Y'], datac[0]['Magnetometer Y'], alternative="less"))
+print(ttest_ind(datax[0]['Magnetometer Y'], datac[0]['Magnetometer Y'], alternative="greater"))
+print(ttest_ind(datax[0]['Magnetometer Y'], datac[0]['Magnetometer Y'], alternative="two-sided"))
+print(ttest_ind(datax[0]['Magnetometer Z'], datac[0]['Magnetometer Z'], alternative="less"))
+print(ttest_ind(datax[0]['Magnetometer Z'], datac[0]['Magnetometer Z'], alternative="greater"))
+print(ttest_ind(datax[0]['Magnetometer Z'], datac[0]['Magnetometer Z'], alternative="two-sided"))
+a = features[0:20000]
+b = features[180000:200000]
+tstats = []
+pvalues = []
+tstats2 = []
+pvalues2 = []
+#T-test compare Feature sets 
+for i in range(1,192):
+  t_statistic, pvalue = ttest_ind(a.iloc[:,i],b.iloc[:,i], alternative="less")
+  t_statistic2, pvalue2 = ttest_ind(a.iloc[:,i],b.iloc[:,i], alternative="greater")
+  tstats.append(t_statistic)
+  pvalues.append(pvalue)
+  tstats2.append(t_statistic2)
+  pvalues2.append(pvalue2)
+  print(feature_names[i], t_statistic, pvalue)
+  print(feature_names[i], t_statistic2, pvalue2)
+
+df = pd.DataFrame(features)
+#Shuffle the dataset 
+df['labels'] = labels
+df['sex_labels'] = sex_labels.values.tolist()
+x = df.sample(frac=1)
+y = x['labels']
+print(x)
+y2 = x['sex_labels']
+x = x.drop('labels', axis=1)
+#x = x.drop('0', axis=1)
+x = x.drop('sex_labels', axis=1)
+print(x)
+
+#Feature Selection: K-best, tune K as hyperparameter
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-df = pd.DataFrame(features)
-x = df.sample(frac=1)
-y = x.iloc[:,0]
-x = x.drop(labels=0, axis=1)
-
-#Train Random Forest Classifier
-
-X_train, X_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=1)
-
-X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25, random_state=1)
-
-clf=RandomForestClassifier(n_estimators=100)
-
-#Train the model using the training sets
-clf.fit(X_train,y_train)
-
-y_pred=clf.predict(X_test)
-yval_pred=clf.predict(X_val)
+from sklearn.feature_selection import VarianceThreshold
 from sklearn import metrics
-# Model Accuracy
-print("Accuracy:",metrics.accuracy_score(y_test, y_pred))
-print("Accuracy:",metrics.accuracy_score(y_val, yval_pred))
+
+
+featurenums = [3, 6, 12, 24, 36, 48, 60]
+estimators = [50, 100, 200, 300, 400]
+featuresets = []
+
+for i in featurenums:
+  featuresets.append(featureSelection(x, i, y, 2))
+test_acc = []
+val_acc = []
+for n in range(len(estimators)):
+  for i in range(len(featuresets)):
+    X_train, X_test, y_train, y_test = train_test_split(featuresets[i], y, test_size=0.2)
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25)
+    clf=RandomForestClassifier(n_estimators=estimators[n])
+    #Train the model using the training sets
+    clf.fit(X_train,y_train)
+    y_pred=clf.predict(X_test)
+    yval_pred=clf.predict(X_val)
+    print("Test Acc of {} & {} : {} Validation Acc {}".format(featurenums[i], estimators[n], metrics.accuracy_score(y_test, y_pred),  metrics.accuracy_score(y_val, yval_pred)))
+
+#Sex Identification task
+estimators = [50, 100, 200, 300, 400]
+featuresets = []
+for i in featurenums:
+  featuresets.append(featureSelection(x, i, y2, 2))
+test_acc = []
+val_acc = []
+for n in range(len(estimators)):
+  for i in range(len(featuresets)):
+    X_train, X_test, y_train, y_test = train_test_split(featuresets[i], y2, test_size=0.2)
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25)
+    clf=RandomForestClassifier(n_estimators=estimators[n])
+    #Train the model using the training sets
+    clf.fit(X_train,y_train)
+    y_pred=clf.predict(X_test)
+    yval_pred=clf.predict(X_val)
+    print("Test Acc of {} & {} : {}".format(featurenums[i], estimators[n], metrics.accuracy_score(y_test, y_pred)))
+    print("Validation Acc of {} & {} : {}".format(featurenums[i], estimators[n], metrics.accuracy_score(y_val, yval_pred)))
+
+#Train Random Forest Classifier but no feature selection at all
+# hyperparameter tuning: trees  100, 200, 300, etc.
+for n in range(len(estimators)):
+  X_train, X_test, y_train, y_test = train_test_split(x, y2, test_size=0.2)
+  X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25)
+
+  clf=RandomForestClassifier(n_estimators=estimators[n])
+
+  #Train the model using the training sets
+  clf.fit(X_train,y_train)
+
+  y_pred=clf.predict(X_test)
+  yval_pred=clf.predict(X_val)
+
+  # Model Accuracy
+  print("Accuracy with {} estimators:".format(n),metrics.accuracy_score(y_test, y_pred), metrics.accuracy_score(y_val, yval_pred))
+
+from sklearn.metrics import classification_report
+from sklearn import tree
+import graphviz
+#Train Random Forest Classifier
+def fit_CART(X, y, criterion, splitter, mdepth, clweight, minleaf):
+
+    # Create training and testing samples
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+
+    # Fit the model
+    model = tree.DecisionTreeClassifier(criterion=criterion, 
+                                        splitter=splitter, 
+                                        max_depth=mdepth,
+                                        class_weight=clweight,
+                                        min_samples_leaf=minleaf, 
+                                        random_state=0, 
+                                  )
+    clf = model.fit(X_train, y_train)
+
+    # Predict class labels on training data
+    pred_labels_tr = model.predict(X_train)
+    # Predict class labels on a test data
+    pred_labels_te = model.predict(X_test)
+
+    # Tree summary and model evaluation metrics
+    print('*************** Tree Summary ***************')
+    print('Classes: ', clf.classes_)
+    print('Tree Depth: ', clf.tree_.max_depth)
+    print('No. of leaves: ', clf.tree_.n_leaves)
+    print('No. of features: ', clf.n_features_in_)
+    print('--------------------------------------------------------')
+    print("")
+    
+    print('*************** Evaluation on Test Data ***************')
+    score_te = model.score(X_test, y_test)
+    print('Accuracy Score: ', score_te)
+    # Look at classification report to evaluate the model
+    print(classification_report(y_test, pred_labels_te))
+    print('--------------------------------------------------------')
+    print("")
+    
+    print('*************** Evaluation on Training Data ***************')
+    score_tr = model.score(X_train, y_train)
+    print('Accuracy Score: ', score_tr)
+    #print(classification_report(y_train, pred_labels_tr))
+    print('--------------------------------------------------------')
+    
+
+fit_CART(x, y, 'gini', 'best', mdepth=3, clweight=None, minleaf=1000)
